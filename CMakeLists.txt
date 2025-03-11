@@ -1,9 +1,5 @@
-cmake_minimum_required(VERSION 3.10)
+cmake_minimum_required(VERSION 3.21)
 project(hiprt)
-
-#
-# Options
-#
 
 # Only one of those 3 flags should be ON at a time, or none. Multiple flags ON are untested and may cause issues.
 option(BAKE_KERNEL "Enable the use of encrypted and baked kernels source code" OFF)
@@ -18,14 +14,11 @@ option(HIPRT_PREFER_HIP_5 "Prefer HIP 5" OFF)
 
 option(FORCE_DISABLE_CUDA "By default Cuda support is automatically added if a Cuda install is detected. Turn this flag to ON to force Cuda to be disabled." OFF)
 
+find_package(Python COMPONENTS Interpreter REQUIRED)
+message(STATUS "Python path = ${Python_EXECUTABLE}")
 
-find_program(PYTHON_EXECUTABLE
-	NAMES python
-	PATHS /usr/bin /usr/local/bin /opt/local/bin
-)
-message(STATUS "Python path = ${PYTHON_EXECUTABLE}")
-
-
+set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/cmake")
+include("${CMAKE_SOURCE_DIR}/cmake/utils.cmake")
 
 # GENERATE_BAKE_KERNEL is enabled by default if we use the flags 'BAKE_KERNEL' or 'BITCODE'.
 # It can be forced to OFF, but in this case, some building functions from the HIPRT API, like hiprtBuildTraceKernelsFromBitcode will fail.
@@ -37,7 +30,6 @@ endif()
 option(GENERATE_BAKE_KERNEL "generate the baked kernels" ${GENERATE_BAKE_KERNEL___DEFAULT})
 message(STATUS "GENERATE_BAKE_KERNEL= ${GENERATE_BAKE_KERNEL}")
 
-
 # Set C++ Standard
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -45,247 +37,11 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Define GTEST_HAS_TR1_TUPLE=0 globally
 add_definitions(-DGTEST_HAS_TR1_TUPLE=0)
 
-
-
-
-
-
-
-# Functions
-function(copy_dir src_dir dst_dir pattern)
-	file(GLOB_RECURSE files "${src_dir}/${pattern}")
-	foreach(file ${files})
-		file(RELATIVE_PATH rel_file ${src_dir} ${file})
-		set(target "${dst_dir}/${rel_file}")
-		get_filename_component(target_dir ${target} DIRECTORY)
-		file(MAKE_DIRECTORY ${target_dir})
-		file(COPY ${file} DESTINATION ${target_dir})
-	endforeach()
-endfunction()
-
-
-
-function(file_exists file)
-	if(EXISTS ${file})
-		return(0)
-	else()
-		return(1)
-	endif()
-endfunction()
-
-function(read_file file)
-	file(READ ${file} content)
-	return(${content})
-endfunction()
-
-
-
-function(get_version file)
-	file(STRINGS ${file} lines)
-	list(GET lines 0 major)
-	list(GET lines 1 minor)
-	list(GET lines 2 patch)
-	set(patch_hex "0x${patch}")
-	set(major ${major} PARENT_SCOPE)
-	set(minor ${minor} PARENT_SCOPE)
-	set(patch ${patch_hex} PARENT_SCOPE)
-endfunction()
-
-
-
-# Remove the last character from the string if it's a / or \\  
-function(remove_trailing_slash strInOut)
-	string(LENGTH "${${strInOut}}" strLength)
-	math(EXPR lastIndex "${strLength} - 1")
-	string(SUBSTRING "${${strInOut}}" ${lastIndex} 1 lastChar)
-	if("${lastChar}" STREQUAL "\\" OR "${lastChar}" STREQUAL "/")
-		string(SUBSTRING "${${strInOut}}" 0 ${lastIndex} strInOut_modified)
-		set(${strInOut} "${strInOut_modified}" PARENT_SCOPE)
-	endif()
-endfunction()
-
-
-
-
-# 'result'      is the HIP version as string, for example: 6.2
-# 'result_path' is the output of the path to HIP, for example:  C:\Program Files\AMD\ROCm\6.2
-function(get_hip_sdk_version result result_path)
-	if(WIN32)
-		set(root ".\\")
-	endif()
-
-	set(exec_perl "")
-	set(hipCommand "hipcc")
-	set(PATH $ENV{PATH})
-	set(useHipFromPATH OFF)
-
-
-	# Check if HIP_PATH is defined as a CMake parameter
-	if(DEFINED HIP_PATH)
-		message(STATUS "HIP_PATH is defined as a CMake parameter: ${HIP_PATH}")
-
-	# Check if HIP_PATH is defined as an environment variable
-	elseif(DEFINED ENV{HIP_PATH})
-		
-		set(HIP_PATH $ENV{HIP_PATH})
-		message(STATUS "HIP_PATH is defined as an environment variable: ${HIP_PATH}")
-			
-	# if HIP_PATH is not in cmake, and not in environment variable
-	else()
-		message(WARNING "WARNING: HIP_PATH is not defined as a CMake parameter or an environment variable - NOT RECOMMENDED")
-
-		# TODO: improve that, but it's not recommanded to use the cmake script without defining HIP_PATH anyway...
-		set(${result_path} "UNKONWN_PATH" PARENT_SCOPE)
-
-		# Check if HIP is in the PATH environment variable
-		string(REPLACE ";" "\n" PATH_LIST ${PATH})
-		foreach(token ${PATH_LIST})
-			if("${token}" MATCHES "hip")
-				if(EXISTS "${token}/hipcc")
-					set(useHipFromPATH ON)
-				endif()
-			endif()
-		endforeach()
-
-
-	endif()
-
-
-	# clean/format HIP_PATH here.
-	if ( HIP_PATH )
-		remove_trailing_slash(HIP_PATH)
-		# message(STATUS "HIP_PATH formatted: ${HIP_PATH}")
-		set(${result_path} ${HIP_PATH} PARENT_SCOPE)
-	endif()
-
-
-	# build hip command for Windows
-	if(WIN32)
-		set(exec_perl "perl")
-
-		if(NOT HIP_PATH)
-			if(useHipFromPATH)
-				set(hipCommand "hipcc")
-			else()
-				# try classic path used by HIPRT developers
-				set(hipCommand "hipSdk\\bin\\hipcc")
-			endif()
-		else()
-		
-			# HIP_PATH is expected to look like: C:\Program Files\AMD\ROCm\5.7
-			
-			if(EXISTS "${HIP_PATH}\\bin\\hipcc.exe")
-				# in newer version of HIP SDK (>= 6.3), we are using 'hipcc.exe --version' to check the version
-				# message(STATUS "using hipcc.exe to get the version")
-				set(exec_perl "")
-				set(hipCommand "${HIP_PATH}\\bin\\hipcc.exe")
-			else()
-				# in older version of HIP SDK, we are using 'perl hipcc --version' to check the version
-				# message(STATUS "using perl hipcc to get the version")
-				set(hipCommand "${HIP_PATH}\\bin\\${hipCommand}")
-			endif()
-
-
-		endif()
-	
-	# build hip command for Linux
-	else()
-	
-		# If not defined we try to take it from the PATH
-		if(NOT HIP_PATH)
-			set(hipCommand "hipcc")
-			
-		# otherwise, build the hipcc command with full path.
-		else()
-			set(hipCommand "${HIP_PATH}/bin/${hipCommand}")
-		endif()
-	endif()
-
-
-	file(WRITE ${CMAKE_BINARY_DIR}/hip_version_tmp.txt "")
-
-	# message(STATUS "hipCommand : ${hipCommand}")
-	# message(STATUS "CMAKE_CURRENT_SOURCE_DIR: ${CMAKE_CURRENT_SOURCE_DIR}")
-
-	execute_process(
-		COMMAND ${exec_perl} "${hipCommand}" --version
-		OUTPUT_FILE ${CMAKE_BINARY_DIR}/hip_version_tmp.txt
-		# ERROR_QUIET
-		WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-		)
-
-	file(READ ${CMAKE_BINARY_DIR}/hip_version_tmp.txt version_output)
-	string(REGEX MATCH "[0-9]+\\.[0-9]+" version "${version_output}")
-
-	file(REMOVE ${CMAKE_BINARY_DIR}/hip_version_tmp.txt)
-
-	if(NOT version)
-		set(version "HIP_SDK_NOT_FOUND")
-	endif()
-
-	message(STATUS "HIP VERSION from command : ${version}")
-	set(${result} ${version} PARENT_SCOPE)
-endfunction()
-
-
 # fill the HIP_VERSION_STR variable, it will look like: "6.2"
 # also get the path to hip that'll be used along all this cmake.
 get_hip_sdk_version(HIP_VERSION_STR HIP_FINAL_PATH)
 message(STATUS "HIP_VERSION_STR = ${HIP_VERSION_STR}")
 message(STATUS "HIP_FINAL_PATH = ${HIP_FINAL_PATH}")
-
-function(write_version_info in_file header_file version_file version_str_out)
-
-	if(NOT EXISTS ${version_file})
-		message(FATAL_ERROR "Version.txt file missing!")
-	endif()
-	if(NOT EXISTS ${in_file})
-		message(FATAL_ERROR "${in_file} file is missing!")
-	endif()
-
-	# Read version file and extract version information
-	get_version(${version_file})
-
-	# set(version "${major}${minor}")
-	# set(version_str "${version}_${patch}")
-
-	# Read the content of the header template file
-	file(READ ${in_file} header_content)
-
-	# Calculate HIPRT_API_VERSION
-	math(EXPR HIPRT_VERSION "${major} * 1000 + ${minor}")
-
-
-	# Format version_str as a zero-padded 5-digit string
-	string(LENGTH "${HIPRT_VERSION}" HIPRT_VERSION_LEN)
-	if(${HIPRT_VERSION_LEN} LESS 5)
-		math(EXPR HIPRT_VERSION_PAD "5 - ${HIPRT_VERSION_LEN}")
-		string(REPEAT "0" ${HIPRT_VERSION_PAD} HIPRT_VERSION_PADDED)
-		set(version_str "${HIPRT_VERSION_PADDED}${HIPRT_VERSION}" )
-	else()
-		set(version_str "${HIPRT_VERSION}" )
-	endif()
-
-	# message(STATUS "HIPRT_API_VERSION: ${version_str}_${patch}")
-
-	set(HIPRT_API_VERSION ${HIPRT_VERSION})
-
-	# Replace placeholders with actual version values
-	string(REPLACE "@HIPRT_MAJOR_VERSION@" "${major}" header_content "${header_content}")
-	string(REPLACE "@HIPRT_MINOR_VERSION@" "${minor}" header_content "${header_content}")
-	string(REPLACE "@HIPRT_PATCH_VERSION@" "${patch}" header_content "${header_content}")
-	string(REPLACE "@HIPRT_VERSION_STR@" "\"${version_str}\"" header_content "${header_content}")
-	string(REPLACE "@HIPRT_API_VERSION@" "${HIPRT_API_VERSION}" header_content "${header_content}")
-
-	# Get HIP SDK version and replace placeholder
-	string(REPLACE "@HIP_VERSION_STR@" "\"${HIP_VERSION_STR}\"" header_content "${header_content}")
-
-	# Write the modified content to the header file
-	file(WRITE ${header_file} "${header_content}")
-
-	set(${version_str_out} ${version_str} PARENT_SCOPE)
-endfunction()
-
 
 # Set up configurations
 set(CMAKE_CONFIGURATION_TYPES "Debug;Release;RelWithDebInfo;DebugGpu" CACHE STRING "Configs" FORCE)
@@ -350,7 +106,6 @@ set(HIPRT_NAME "hiprt${version_str_}")
 
 # Project: HIPRT
 add_library(${HIPRT_NAME} SHARED)
-
 target_compile_definitions(${HIPRT_NAME} PRIVATE HIPRT_EXPORTS)
 
 
@@ -376,8 +131,6 @@ if(HIPRT_PREFER_HIP_5)
 	add_definitions(-DHIPRT_PREFER_HIP_5)
 endif()
 
-
-
 # files generated by compile.py and precompile_bitcode.py
 if(WIN32)
 	set(KERNEL_OS_POSTFIX "win")
@@ -388,16 +141,13 @@ set(KERNEL_HIPRT_COMP    "${BASE_OUTPUT_DIR}/${CMAKE_BUILD_TYPE}/hiprt${version_
 set(KERNEL_UNITTEST_COMP "${BASE_OUTPUT_DIR}/${CMAKE_BUILD_TYPE}/hiprt${version_str_}_${HIP_VERSION_STR}_precompiled_bitcode_${KERNEL_OS_POSTFIX}.hipfb")   # example:  hiprt02005_6.2_precompiled_bitcode_win.hipfb
 set(KERNEL_OROCHI_COMP "${BASE_OUTPUT_DIR}/${CMAKE_BUILD_TYPE}/oro_compiled_kernels.hipfb")
 
-
 # precompile kernels:
 if(PRECOMPILE)
-
 	if(FORCE_DISABLE_CUDA)
 		set(CUDA_OPTION "")
 	else()
 		set(CUDA_OPTION "--nvidia")
 	endif()
-
 
 	set(bvh_source
 	${CMAKE_SOURCE_DIR}/hiprt/hiprt_vec.h
@@ -474,7 +224,6 @@ endif()
 # convert the binary to a buffer that will be embeded inside the binary
 # it's expected the step 'PRECOMPILE' has been executed.
 if ( BAKE_COMPILED_KERNEL )
-	
 	message(">> precompiled will be embedded.")
 	
 	set(PYTHON_FILE "${CMAKE_CURRENT_SOURCE_DIR}/contrib/Orochi/scripts/convert_binary_to_array.py")
@@ -531,7 +280,6 @@ if(BAKE_KERNEL OR GENERATE_BAKE_KERNEL)
 endif()
 
 
-
 if ( BAKE_COMPILED_KERNEL )
 	# enable the 'BAKE_COMPILED_KERNEL' on Orochi:  this mode is activated by adding those 2 defines.
 	target_compile_definitions(${HIPRT_NAME} PRIVATE ORO_BAKE_COMPILED_KERNEL)
@@ -540,12 +288,9 @@ if ( BAKE_COMPILED_KERNEL )
 	target_compile_definitions(${HIPRT_NAME} PRIVATE HIPRT_BAKE_COMPILED_KERNEL )
 endif()
 
-
 if(BAKE_KERNEL)
 	target_compile_definitions(${HIPRT_NAME} PRIVATE HIPRT_LOAD_FROM_STRING ORO_PP_LOAD_FROM_STRING)
 endif()
-
-
 
 if(WIN32)
 	target_link_libraries(${HIPRT_NAME} version)
@@ -588,8 +333,6 @@ install(FILES ${HIPRT_ORO_HEADERS}
 file(GLOB HIPRT_HIPFB_FILES "${BASE_OUTPUT_DIR}/${CMAKE_BUILD_TYPE}/*.hipfb")
 install(FILES ${HIPRT_HIPFB_FILES}
 		DESTINATION bin)
-
-
 
 
 # Project: Unit Test
