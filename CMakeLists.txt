@@ -8,8 +8,8 @@ option(BITCODE "Enable bitcode linking: when running the program, it's expected 
 
 option(PRECOMPILE "Precompile kernels" OFF)
 option(HIPRTEW "Use hiprtew" OFF)
-option(NO_ENCRYPT "Don't encrypt kernel source and binaries" OFF)
-option(NO_UNITTEST "Don't build unit tests" OFF)
+option(ENCRYPT "Encrypt kernel source and binaries" ON)
+option(UNITTEST "Build unit tests" ON)
 option(HIPRT_PREFER_HIP_5 "Prefer HIP 5" OFF)
 
 option(FORCE_DISABLE_CUDA "By default Cuda support is automatically added if a Cuda install is detected. Turn this flag to ON to force Cuda to be disabled." OFF)
@@ -120,7 +120,7 @@ if(BITCODE)
 	target_compile_definitions(${HIPRT_NAME} PRIVATE HIPRT_BITCODE_LINKING ORO_PRECOMPILED)
 endif()
 
-if(NOT NO_ENCRYPT)
+if(ENCRYPT)
 	target_compile_definitions(${HIPRT_NAME} PRIVATE HIPRT_ENCRYPT )
 	set(ENV{HIPRT_NO_ENCRYPT} "OFF")
 else()
@@ -190,7 +190,7 @@ if(PRECOMPILE)
 		DEPENDS ${KERNEL_HIPRT_COMP} ${KERNEL_OROCHI_COMP}
 		)
 	
-	if(NOT NO_UNITTEST)
+	if(UNITTEST)
 
 		set(unittest_kernel_source
 		${CMAKE_SOURCE_DIR}/test/bitcodes/custom_func_table.cpp
@@ -336,7 +336,7 @@ install(FILES ${HIPRT_HIPFB_FILES}
 
 
 # Project: Unit Test
-if(NOT NO_UNITTEST)
+if(UNITTEST)
 
 	add_executable(unittest)
 
